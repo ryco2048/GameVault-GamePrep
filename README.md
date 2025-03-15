@@ -1,4 +1,4 @@
-# GOG Games Preparation Script for GameVault
+# GOG Game Preparation Script for GameVault
 
 This PowerShell script automates the process of preparing your GOG games for use with GameVault by compressing them according to GameVault's required format and naming conventions.
 
