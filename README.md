@@ -15,6 +15,7 @@ This PowerShell script automates the process of preparing your GOG games for use
 - Windows with PowerShell
 - 7-Zip (latest version 24.09 recommended for security) 
 - GOG games installed in a source directory
+- If Games are GOG offline installers, make sure all install files are included in a folder of the game's proper name (ie. "Fallout 2" and NOT "FALLOUT_2-1998")
 
 ## Installation
 
@@ -24,7 +25,7 @@ This PowerShell script automates the process of preparing your GOG games for use
 
 ## Usage
 
-1. Open PowerShell
+1. Open PowerShell as Admin
 2. Navigate to the script directory
 3. Run the script:
 
