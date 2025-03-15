@@ -2,10 +2,10 @@
 # This script prepares GOG games for GameVault by compressing and naming them according to GameVault standards
 
 # Define source and destination directories
-$sourceDir = "C:\Games\GOG-Archive"
-$destinationDir = "C:\Games\GameVault-Ready"
-$tempDir = "C:\Games\Temp"
-$sevenZipPath = "C:\Program Files\7-Zip\7z.exe" # Update this path if 7-Zip is installed elsewhere
+$sourceDir = "C:\Games\GOG-Archive"                # Update this path to your source folder
+$destinationDir = "C:\Games\GameVault-Ready"       # Update this path to your destination folder
+$tempDir = "C:\Games\Temp"                         # Update this path to your temp folded   
+$sevenZipPath = "C:\Program Files\7-Zip\7z.exe"    # Update this path if 7-Zip is installed elsewhere
 
 # Create destination and temp directories if they don't exist
 if (!(Test-Path $destinationDir)) {
