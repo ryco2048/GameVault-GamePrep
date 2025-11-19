@@ -1,10 +1,11 @@
-# GameVault GOG Game Preparation Script
-# This script prepares GOG games for GameVault by compressing and naming them according to GameVault standards
+# GameVault Game Preparation Script
+# This script prepares both GOG and Steam games for GameVault by compressing and naming them according to GameVault standards
 
 # Define source and destination directories
-$sourceDir = "C:\Games\GOG-Archive"                # Update this path to your source folder
+$gogSourceDir = "C:\Games\GOG-Archive"             # Update this path to your GOG games folder
+$steamSourceDir = "C:\Games\Steam-Archive"         # Update this path to your Steam games folder
 $destinationDir = "C:\Games\GameVault-Ready"       # Update this path to your destination folder
-$tempDir = "C:\Games\Temp"                         # Update this path to your temp folded   
+$tempDir = "C:\Games\Temp"                         # Update this path to your temp folded
 $sevenZipPath = "C:\Program Files\7-Zip\7z.exe"    # Update this path if 7-Zip is installed elsewhere
 
 # Create destination and temp directories if they don't exist
@@ -27,10 +28,11 @@ if (!(Test-Path $sevenZipPath)) {
 # Function to get game information from user
 function Get-GameInfo {
     param (
-        [string]$gameFolderName
+        [string]$gameFolderName,
+        [string]$gameSource
     )
 
-    Write-Host "`nPreparing game: $gameFolderName" -ForegroundColor Cyan
+    Write-Host "`nPreparing game: $gameFolderName (Source: $gameSource)" -ForegroundColor Cyan
 
     $title = Read-Host "Enter game title (default: $gameFolderName)"
     if ([string]::IsNullOrWhiteSpace($title)) { $title = $gameFolderName }
@@ -109,23 +111,56 @@ function Compress-Game {
 }
 
 # Main processing loop
-$gameFolders = Get-ChildItem -Path $sourceDir -Directory
+# Collect games from both GOG and Steam sources
+$allGames = @()
 
-if ($gameFolders.Count -eq 0) {
-    Write-Host "No game folders found in $sourceDir" -ForegroundColor Yellow
+# Check GOG directory
+if (Test-Path $gogSourceDir) {
+    $gogFolders = Get-ChildItem -Path $gogSourceDir -Directory
+    foreach ($folder in $gogFolders) {
+        $allGames += [PSCustomObject]@{
+            Name = $folder.Name
+            Path = $folder.FullName
+            Source = "GOG"
+        }
+    }
+    Write-Host "Found $($gogFolders.Count) GOG game folders" -ForegroundColor Green
+} else {
+    Write-Host "GOG source directory not found: $gogSourceDir" -ForegroundColor Yellow
+}
+
+# Check Steam directory
+if (Test-Path $steamSourceDir) {
+    $steamFolders = Get-ChildItem -Path $steamSourceDir -Directory
+    foreach ($folder in $steamFolders) {
+        $allGames += [PSCustomObject]@{
+            Name = $folder.Name
+            Path = $folder.FullName
+            Source = "Steam"
+        }
+    }
+    Write-Host "Found $($steamFolders.Count) Steam game folders" -ForegroundColor Green
+} else {
+    Write-Host "Steam source directory not found: $steamSourceDir" -ForegroundColor Yellow
+}
+
+if ($allGames.Count -eq 0) {
+    Write-Host "No game folders found in either GOG or Steam directories" -ForegroundColor Red
     exit
 }
 
-Write-Host "Found $($gameFolders.Count) game folders to process" -ForegroundColor Green
+Write-Host "`nTotal: $($allGames.Count) game folders to process" -ForegroundColor Green
+Write-Host "-----------------------------------------"
 
-foreach ($gameFolder in $gameFolders) {
-    $gameName = $gameFolder.Name
-    $gamePath = $gameFolder.FullName
+foreach ($game in $allGames) {
+    $gameName = $game.Name
+    $gamePath = $game.Path
+    $gameSource = $game.Source
 
-    $fileName = Get-GameInfo -gameFolderName $gameName
+    $fileName = Get-GameInfo -gameFolderName $gameName -gameSource $gameSource
     $destinationFile = Join-Path -Path $destinationDir -ChildPath $fileName
 
-    Write-Host "`nProcessing: $gameName" -ForegroundColor Cyan
+    Write-Host "`nProcessing: $gameName ($gameSource)" -ForegroundColor Cyan
     Write-Host "Target file: $fileName" -ForegroundColor Cyan
 
     $compressionChoice = Read-Host "Select compression level: 1 (Fast), 5 (Balanced), 9 (Maximum) (default: 5)"
