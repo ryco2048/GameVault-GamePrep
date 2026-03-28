@@ -1,16 +1,22 @@
-# GameVault Game Preparation Script
+# GameVault Game Preparation Scripts
 
-This PowerShell script automates the process of preparing your GOG and Steam games for use with GameVault by compressing them according to GameVault's required format and naming conventions.
+These PowerShell scripts automate the process of preparing your GOG and Steam games for use with GameVault by compressing them according to GameVault's required format and naming conventions.
+
+## Scripts
+
+### `Prepare-GamesForGameVault.ps1`
+Interactive script that prompts you for game metadata (title, version, release year, game type, etc.) and compresses each game folder into a properly named `.7z` archive. Use this when your source folders are not yet named per GameVault conventions.
+
+### `Compress-ForGameVault.ps1`
+Batch compression script for game folders that are already named per GameVault conventions. Compresses all folders in the source directories using maximum compression settings with no prompts. Skips any game that already has an archive in the destination.
 
 ## Features
 
 - Supports both GOG and Steam game sources
-- Compresses game folders using 7-Zip with customizable compression levels
+- Compresses game folders using 7-Zip
 - Follows GameVault's naming convention requirements
 - Supports all GameVault metadata tags (Early Access, Game Type, No Cache)
-- Interactive prompts for game information
-- Creates properly formatted 7z archives ready for GameVault
-- Automatically creates destination and temporary directories if needed
+- Automatically creates destination directories if needed
 
 ## Requirements
 
@@ -21,16 +27,18 @@ This PowerShell script automates the process of preparing your GOG and Steam gam
 
 ## Installation
 
-1. Clone this repository or download the script
-2. Ensure 7-Zip is installed (the script assumes it's at `C:\Program Files\7-Zip\7z.exe`)
-3. Edit the script to configure your directory paths:
-   - `$gogSourceDir`: Path to your GOG games folder
-   - `$steamSourceDir`: Path to your Steam games folder
-   - `$destinationDir`: Path where GameVault-ready files will be saved
-   - `$tempDir`: Path for temporary processing files
-   - `$sevenZipPath`: Path to 7-Zip executable (if different from default)
+1. Clone this repository or download the scripts
+2. Ensure 7-Zip is installed (the scripts assume it's at `C:\Program Files\7-Zip\7z.exe`)
+3. Place your game folders in the appropriate source directories:
+   - `GOG-Archive\`: GOG game folders
+   - `Steam-Archive\`: Steam game folders
+4. If 7-Zip is installed to a different path, update `$sevenZipPath` in whichever script you are using
 
 ## Usage
+
+### Interactive preparation (`Prepare-GamesForGameVault.ps1`)
+
+Use this when your folders are not yet named per GameVault conventions.
 
 1. Open PowerShell as Admin
 2. Navigate to the script directory
@@ -40,13 +48,27 @@ This PowerShell script automates the process of preparing your GOG and Steam gam
 .\Prepare-GamesForGameVault.ps1
 ```
 
-4. The script will scan both GOG and Steam source directories
-5. Follow the interactive prompts for each game found
-6. Compressed games will be saved to the destination directory
+4. Follow the interactive prompts for each game found
+5. Compressed games will be saved to `GameVault-Ready\`
+
+### Batch compression (`Compress-ForGameVault.ps1`)
+
+Use this when your folders are already named per GameVault conventions.
+
+1. Open PowerShell as Admin
+2. Navigate to the script directory
+3. Run the script:
+
+```powershell
+.\Compress-ForGameVault.ps1
+```
+
+4. All game folders in `GOG-Archive\` and `Steam-Archive\` will be compressed to `GameVault-Ready\` using maximum compression
+5. Folders with an existing archive in the destination are skipped automatically
 
 ## GameVault Naming Convention
 
-The script follows GameVault's required naming format:
+`Prepare-GamesForGameVault.ps1` builds filenames following GameVault's required naming format:
 ```
 Title (Version) (EarlyAccess) (GameType) (NoCache) (ReleaseYear).7z
 ```
@@ -66,14 +88,16 @@ Where:
 
 ## Compression Options
 
-The script offers three compression levels:
+`Prepare-GamesForGameVault.ps1` offers three compression levels:
 1. **Fast** (Level 1): Minimal compression, fastest processing
 2. **Balanced** (Level 5): Default, good balance of size and speed
 3. **Maximum** (Level 9): Highest compression, slowest processing
 
+`Compress-ForGameVault.ps1` always uses maximum compression (`-mx=9 -mfb=64 -md=32m -ms=on`).
+
 ## Security Note
 
-Always keep 7-Zip updated to the latest version (currently 24.09) to avoid security vulnerabilities in older versions. 
+Always keep 7-Zip updated to the latest version (currently 24.09) to avoid security vulnerabilities in older versions.
 
 ## Contributing
 
