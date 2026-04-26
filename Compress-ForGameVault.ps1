@@ -7,11 +7,22 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$GogSourceDir   = (Join-Path $PSScriptRoot "GOG-Archive"),
-    [string]$SteamSourceDir = (Join-Path $PSScriptRoot "Steam-Archive"),
+    # Map of source-label -> directory. Each top-level subfolder of every
+    # directory is treated as a candidate game. Override to add Itch, Epic,
+    # etc.: -Sources @{ GOG='D:\GOG'; Itch='E:\Itch' }
+    [hashtable]$Sources = @{
+        GOG   = (Join-Path $PSScriptRoot "GOG-Archive")
+        Steam = (Join-Path $PSScriptRoot "Steam-Archive")
+    },
     [string]$DestinationDir = (Join-Path $PSScriptRoot "GameVault-Ready"),
     [string]$SevenZipPath,
-    [switch]$EmitSha256
+    [switch]$EmitSha256,
+    # Re-archive folders whose .7z already exists in the destination.
+    [switch]$Force,
+    # Skip integrity verification (`7z t`) on existing archives before deciding
+    # to skip them. By default existing archives that fail verification are
+    # re-archived.
+    [switch]$SkipIntegrityCheck
 )
 
 Set-StrictMode -Version Latest
@@ -96,38 +107,30 @@ if (!(Test-Path $DestinationDir))
     }
 }
 
-# Collect games from both GOG and Steam sources
+# Collect games from every configured source.
 $allGames = @()
 
-if (Test-Path $GogSourceDir)
+foreach ($entry in $Sources.GetEnumerator())
 {
-    $gogFolders = Get-ChildItem -Path $GogSourceDir -Directory
-    foreach ($folder in $gogFolders)
+    $label = $entry.Key
+    $path  = $entry.Value
+    if (Test-Path $path)
     {
-        $allGames += [PSCustomObject]@{ Name = $folder.Name; Path = $folder.FullName; Source = "GOG" }
-    }
-    Write-Host "Found $($gogFolders.Count) GOG game folders" -ForegroundColor Green
-} else
-{
-    Write-Warning "GOG source directory not found: $GogSourceDir"
-}
-
-if (Test-Path $SteamSourceDir)
-{
-    $steamFolders = Get-ChildItem -Path $SteamSourceDir -Directory
-    foreach ($folder in $steamFolders)
+        $folders = Get-ChildItem -LiteralPath $path -Directory
+        foreach ($folder in $folders)
+        {
+            $allGames += [PSCustomObject]@{ Name = $folder.Name; Path = $folder.FullName; Source = $label }
+        }
+        Write-Host "Found $($folders.Count) $label game folders" -ForegroundColor Green
+    } else
     {
-        $allGames += [PSCustomObject]@{ Name = $folder.Name; Path = $folder.FullName; Source = "Steam" }
+        Write-Warning "$label source directory not found: $path"
     }
-    Write-Host "Found $($steamFolders.Count) Steam game folders" -ForegroundColor Green
-} else
-{
-    Write-Warning "Steam source directory not found: $SteamSourceDir"
 }
 
 if ($allGames.Count -eq 0)
 {
-    Write-Warning "No game folders found in GOG or Steam source directories."
+    Write-Warning "No game folders found in any configured source directory."
     exit 0
 }
 
@@ -194,10 +197,28 @@ foreach ($game in $valid)
 
     Write-Host "[$($game.Source)] $($game.Name)" -ForegroundColor Cyan
 
-    if (Test-Path $archivePath)
+    if (Test-Path -LiteralPath $archivePath)
     {
-        Write-Host "  SKIPPED (archive exists): $archiveName" -ForegroundColor Yellow
-        continue
+        $skipExisting = $true
+        if ($Force)
+        {
+            Write-Host "  -Force set: re-archiving existing $archiveName" -ForegroundColor DarkGray
+            $skipExisting = $false
+        } elseif (-not $SkipIntegrityCheck)
+        {
+            & "$SevenZipPath" t "$archivePath" | Out-Null
+            if ($LASTEXITCODE -ne 0)
+            {
+                Write-Warning "  Existing archive failed integrity check; re-archiving: $archiveName"
+                Remove-Item -LiteralPath $archivePath -Force
+                $skipExisting = $false
+            }
+        }
+        if ($skipExisting)
+        {
+            Write-Host "  SKIPPED (archive exists): $archiveName" -ForegroundColor Yellow
+            continue
+        }
     }
 
     if (-not $PSCmdlet.ShouldProcess($archivePath, "7-Zip compress from $($game.Path)"))
@@ -209,12 +230,17 @@ foreach ($game in $valid)
     # Write to .tmp first; only rename to final name on success so partial
     # archives never end up in the GameVault-Ready directory.
     $tempArchive = "$archivePath.tmp"
-    if (Test-Path $tempArchive) { Remove-Item $tempArchive -Force }
+    if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force }
 
+    # Push into the source folder so 7-Zip never sees special characters
+    # ([, ], ?, etc.) in the source path that its wildcard parser would
+    # otherwise interpret. Pop in finally so an error doesn't leave us in
+    # the wrong working directory.
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Push-Location -LiteralPath $game.Path
     try
     {
-        & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempArchive" "$($game.Path)\*" | Out-Null
+        & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempArchive" "*" | Out-Null
         if ($LASTEXITCODE -ne 0)
         {
             throw "7-Zip exited $LASTEXITCODE"
@@ -228,10 +254,13 @@ foreach ($game in $valid)
     } catch
     {
         $sw.Stop()
-        if (Test-Path $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force -ErrorAction SilentlyContinue }
         Write-Host "  FAILED ($_)" -ForegroundColor Red
         Write-Error "7-Zip failed for '$($game.Name)': $_" -ErrorAction Continue
         $failed++
+    } finally
+    {
+        Pop-Location
     }
 }
 
