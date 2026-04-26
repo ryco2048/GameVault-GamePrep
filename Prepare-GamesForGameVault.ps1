@@ -1,32 +1,68 @@
 # GameVault Game Preparation Script
-# This script prepares both GOG and Steam games for GameVault by compressing and naming them according to GameVault standards
+# Prepares both GOG and Steam games for GameVault by compressing and naming them
+# according to GameVault standards via interactive prompts.
+
+#Requires -Version 5.1
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 # Define source and destination directories
-$gogSourceDir = Join-Path $PSScriptRoot "GOG-Archive"
+$gogSourceDir   = Join-Path $PSScriptRoot "GOG-Archive"
 $steamSourceDir = Join-Path $PSScriptRoot "Steam-Archive"
 $destinationDir = Join-Path $PSScriptRoot "GameVault-Ready"
-$tempDir = Join-Path $env:TEMP "GameVault-Prep"
-$sevenZipPath = "C:\Program Files\7-Zip\7z.exe"    # Update this path if 7-Zip is installed elsewhere
 
-# Create destination and temp directories if they don't exist
-if (!(Test-Path $destinationDir)) {
+# Locate 7-Zip: env override -> standard install paths -> PATH lookup.
+function Find-SevenZip
+{
+    if ($env:SEVENZIP_PATH -and (Test-Path $env:SEVENZIP_PATH))
+    {
+        return $env:SEVENZIP_PATH
+    }
+    $candidates = @(
+        "C:\Program Files\7-Zip\7z.exe",
+        "C:\Program Files (x86)\7-Zip\7z.exe"
+    )
+    foreach ($candidate in $candidates)
+    {
+        if (Test-Path $candidate) { return $candidate }
+    }
+    $onPath = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    return $null
+}
+
+# Strip characters Windows forbids in filenames and trim whitespace/trailing dots.
+function Format-SafeFileName
+{
+    param([string]$Name)
+    $invalid = [IO.Path]::GetInvalidFileNameChars()
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($ch in $Name.ToCharArray())
+    {
+        if ($invalid -notcontains $ch) { [void]$sb.Append($ch) }
+    }
+    return $sb.ToString().Trim().TrimEnd('.')
+}
+
+$sevenZipPath = Find-SevenZip
+if (-not $sevenZipPath)
+{
+    Write-Host "ERROR: 7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, or add 7z.exe to PATH." -ForegroundColor Red
+    exit 1
+}
+Write-Host "Using 7-Zip: $sevenZipPath" -ForegroundColor DarkGray
+
+# Create destination directory if needed
+if (!(Test-Path $destinationDir))
+{
     New-Item -ItemType Directory -Path $destinationDir | Out-Null
     Write-Host "Created destination directory: $destinationDir"
 }
 
-if (!(Test-Path $tempDir)) {
-    New-Item -ItemType Directory -Path $tempDir | Out-Null
-    Write-Host "Created temporary directory: $tempDir"
-}
-
-# Check if 7-Zip is installed
-if (!(Test-Path $sevenZipPath)) {
-    Write-Host "7-Zip not found at $sevenZipPath. Please install 7-Zip or update the path in the script." -ForegroundColor Red
-    exit
-}
-
 # Function to get game information from user
-function Get-GameInfo {
+function Get-GameInfo
+{
     param (
         [string]$gameFolderName,
         [string]$gameSource
@@ -35,21 +71,47 @@ function Get-GameInfo {
     Write-Host "`nPreparing game: $gameFolderName (Source: $gameSource)" -ForegroundColor Cyan
 
     $title = Read-Host "Enter game title (default: $gameFolderName)"
-    if ([string]::IsNullOrWhiteSpace($title)) { $title = $gameFolderName }
+    if ([string]::IsNullOrWhiteSpace($title))
+    { $title = $gameFolderName
+    }
+    $title = Format-SafeFileName -Name $title
+    if ([string]::IsNullOrWhiteSpace($title))
+    {
+        throw "Title became empty after sanitization. Aborting."
+    }
 
     $version = Read-Host "Enter game version (e.g., v1.2.3) (optional)"
+    if ($version) { $version = Format-SafeFileName -Name $version }
 
     $earlyAccess = Read-Host "Is this an Early Access game? (y/n) (default: n)"
-    $earlyAccessTag = if ($earlyAccess -eq "y") { "EA" } else { "" }
+    $earlyAccessTag = if ($earlyAccess -eq "y")
+    { "EA"
+    } else
+    { ""
+    }
 
+    $allowedTypes = @('W_S','W','L','M','A')
     $gameType = Read-Host "Enter game type (W_S, W, L, M, A) (default: W)"
-    if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = "W" }
+    if ([string]::IsNullOrWhiteSpace($gameType))
+    { $gameType = "W"
+    }
+    while ($gameType -notin $allowedTypes)
+    {
+        Write-Host "Invalid game type. Must be one of: $($allowedTypes -join ', ')" -ForegroundColor Yellow
+        $gameType = Read-Host "Enter game type (W_S, W, L, M, A)"
+        if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = "W" }
+    }
 
     $noCache = Read-Host "Disable caching for this game? (y/n) (default: n)"
-    $noCacheTag = if ($noCache -eq "y") { "NC" } else { "" }
+    $noCacheTag = if ($noCache -eq "y")
+    { "NC"
+    } else
+    { ""
+    }
 
     $releaseYear = Read-Host "Enter release year (e.g., 2023) (required)"
-    while ([string]::IsNullOrWhiteSpace($releaseYear) -or !($releaseYear -match '^\d{4}$')) {
+    while ([string]::IsNullOrWhiteSpace($releaseYear) -or !($releaseYear -match '^\d{4}$'))
+    {
         Write-Host "Release year is required and must be a 4-digit number." -ForegroundColor Yellow
         $releaseYear = Read-Host "Enter release year (e.g., 2023)"
     }
@@ -57,19 +119,23 @@ function Get-GameInfo {
     # Build filename according to GameVault naming convention
     $fileName = $title
 
-    if (![string]::IsNullOrWhiteSpace($version)) {
+    if (![string]::IsNullOrWhiteSpace($version))
+    {
         $fileName += " ($version)"
     }
 
-    if (![string]::IsNullOrWhiteSpace($earlyAccessTag)) {
+    if (![string]::IsNullOrWhiteSpace($earlyAccessTag))
+    {
         $fileName += " ($earlyAccessTag)"
     }
 
-    if (![string]::IsNullOrWhiteSpace($gameType)) {
+    if (![string]::IsNullOrWhiteSpace($gameType))
+    {
         $fileName += " ($gameType)"
     }
 
-    if (![string]::IsNullOrWhiteSpace($noCacheTag)) {
+    if (![string]::IsNullOrWhiteSpace($noCacheTag))
+    {
         $fileName += " ($noCacheTag)"
     }
 
@@ -79,32 +145,40 @@ function Get-GameInfo {
 }
 
 # Function to compress a game folder
-function Compress-Game {
+function Compress-Game
+{
     param (
         [string]$sourcePath,
         [string]$destinationFile,
+        [ValidateSet(1, 5, 9)]
         [int]$compressionLevel = 5
     )
 
     Write-Host "Compressing $sourcePath to $destinationFile..." -ForegroundColor Yellow
 
     # Compression command based on level
-    switch ($compressionLevel) {
-        1 { # Fast compression
+    switch ($compressionLevel)
+    {
+        1
+        { # Fast (store only, no compression)
             & "$sevenZipPath" a -mx=0 -ms=off "$destinationFile" "$sourcePath\*"
         }
-        9 { # Maximum compression
-            & "$sevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on "$destinationFile" "$sourcePath\*"
+        5
+        { # Balanced
+            & "$sevenZipPath" a -mx=5 -mmt=on "$destinationFile" "$sourcePath\*"
         }
-        default { # Balanced compression (default)
-            & "$sevenZipPath" a -mx=5 "$destinationFile" "$sourcePath\*"
+        9
+        { # Maximum compression
+            & "$sevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$destinationFile" "$sourcePath\*"
         }
     }
 
-    if ($LASTEXITCODE -eq 0) {
+    if ($LASTEXITCODE -eq 0)
+    {
         Write-Host "Compression completed successfully!" -ForegroundColor Green
         return $true
-    } else {
+    } else
+    {
         Write-Host "Compression failed with exit code $LASTEXITCODE" -ForegroundColor Red
         return $false
     }
@@ -115,9 +189,11 @@ function Compress-Game {
 $allGames = @()
 
 # Check GOG directory
-if (Test-Path $gogSourceDir) {
+if (Test-Path $gogSourceDir)
+{
     $gogFolders = Get-ChildItem -Path $gogSourceDir -Directory
-    foreach ($folder in $gogFolders) {
+    foreach ($folder in $gogFolders)
+    {
         $allGames += [PSCustomObject]@{
             Name = $folder.Name
             Path = $folder.FullName
@@ -125,14 +201,17 @@ if (Test-Path $gogSourceDir) {
         }
     }
     Write-Host "Found $($gogFolders.Count) GOG game folders" -ForegroundColor Green
-} else {
+} else
+{
     Write-Host "GOG source directory not found: $gogSourceDir" -ForegroundColor Yellow
 }
 
 # Check Steam directory
-if (Test-Path $steamSourceDir) {
+if (Test-Path $steamSourceDir)
+{
     $steamFolders = Get-ChildItem -Path $steamSourceDir -Directory
-    foreach ($folder in $steamFolders) {
+    foreach ($folder in $steamFolders)
+    {
         $allGames += [PSCustomObject]@{
             Name = $folder.Name
             Path = $folder.FullName
@@ -140,19 +219,22 @@ if (Test-Path $steamSourceDir) {
         }
     }
     Write-Host "Found $($steamFolders.Count) Steam game folders" -ForegroundColor Green
-} else {
+} else
+{
     Write-Host "Steam source directory not found: $steamSourceDir" -ForegroundColor Yellow
 }
 
-if ($allGames.Count -eq 0) {
+if ($allGames.Count -eq 0)
+{
     Write-Host "No game folders found in either GOG or Steam directories" -ForegroundColor Red
-    exit
+    exit 1
 }
 
 Write-Host "`nTotal: $($allGames.Count) game folders to process" -ForegroundColor Green
 Write-Host "-----------------------------------------"
 
-foreach ($game in $allGames) {
+foreach ($game in $allGames)
+{
     $gameName = $game.Name
     $gamePath = $game.Path
     $gameSource = $game.Source
@@ -164,15 +246,18 @@ foreach ($game in $allGames) {
     Write-Host "Target file: $fileName" -ForegroundColor Cyan
 
     $compressionChoice = Read-Host "Select compression level: 1 (Fast), 5 (Balanced), 9 (Maximum) (default: 5)"
-    if ([string]::IsNullOrWhiteSpace($compressionChoice) -or !($compressionChoice -match '^[159]$')) {
+    if ([string]::IsNullOrWhiteSpace($compressionChoice) -or !($compressionChoice -match '^[159]$'))
+    {
         $compressionChoice = 5
     }
 
     $success = Compress-Game -sourcePath $gamePath -destinationFile $destinationFile -compressionLevel ([int]$compressionChoice)
 
-    if ($success) {
+    if ($success)
+    {
         Write-Host "Successfully prepared $gameName for GameVault" -ForegroundColor Green
-    } else {
+    } else
+    {
         Write-Host "Failed to prepare $gameName" -ForegroundColor Red
     }
 
