@@ -48,16 +48,16 @@ function Format-SafeFileName
 $sevenZipPath = Find-SevenZip
 if (-not $sevenZipPath)
 {
-    Write-Host "ERROR: 7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, or add 7z.exe to PATH." -ForegroundColor Red
+    Write-Error "7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, or add 7z.exe to PATH."
     exit 1
 }
-Write-Host "Using 7-Zip: $sevenZipPath" -ForegroundColor DarkGray
+Write-Verbose "Using 7-Zip: $sevenZipPath"
 
 # Create destination directory if needed
 if (!(Test-Path $destinationDir))
 {
     New-Item -ItemType Directory -Path $destinationDir | Out-Null
-    Write-Host "Created destination directory: $destinationDir"
+    Write-Verbose "Created destination directory: $destinationDir"
 }
 
 # Builds a GameVault-compliant archive filename from interactive user input.
@@ -97,7 +97,7 @@ function Build-GameVaultFileName
     }
     while ($gameType -notin $allowedTypes)
     {
-        Write-Host "Invalid game type. Must be one of: $($allowedTypes -join ', ')" -ForegroundColor Yellow
+        Write-Warning "Invalid game type. Must be one of: $($allowedTypes -join ', ')"
         $gameType = Read-Host "Enter game type (W_S, W, L, M, A)"
         if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = "W" }
     }
@@ -118,7 +118,7 @@ function Build-GameVaultFileName
         {
             break
         }
-        Write-Host "Release year must be a 4-digit number between $minYear and $maxYear." -ForegroundColor Yellow
+        Write-Warning "Release year must be a 4-digit number between $minYear and $maxYear."
         $releaseYear = Read-Host "Enter release year (e.g., 2023)"
     }
 
@@ -160,7 +160,7 @@ function Compress-Game
         [int]$compressionLevel = 5
     )
 
-    Write-Host "Compressing $sourcePath to $destinationFile..." -ForegroundColor Yellow
+    Write-Verbose "Compressing $sourcePath to $destinationFile..."
 
     # Compression command based on level
     switch ($compressionLevel)
@@ -185,7 +185,7 @@ function Compress-Game
         return $true
     } else
     {
-        Write-Host "Compression failed with exit code $LASTEXITCODE" -ForegroundColor Red
+        Write-Error "Compression failed with exit code $LASTEXITCODE" -ErrorAction Continue
         return $false
     }
 }
@@ -209,7 +209,7 @@ if (Test-Path $gogSourceDir)
     Write-Host "Found $($gogFolders.Count) GOG game folders" -ForegroundColor Green
 } else
 {
-    Write-Host "GOG source directory not found: $gogSourceDir" -ForegroundColor Yellow
+    Write-Warning "GOG source directory not found: $gogSourceDir"
 }
 
 # Check Steam directory
@@ -227,12 +227,12 @@ if (Test-Path $steamSourceDir)
     Write-Host "Found $($steamFolders.Count) Steam game folders" -ForegroundColor Green
 } else
 {
-    Write-Host "Steam source directory not found: $steamSourceDir" -ForegroundColor Yellow
+    Write-Warning "Steam source directory not found: $steamSourceDir"
 }
 
 if ($allGames.Count -eq 0)
 {
-    Write-Host "No game folders found in either GOG or Steam directories" -ForegroundColor Red
+    Write-Error "No game folders found in either GOG or Steam directories"
     exit 1
 }
 
@@ -264,7 +264,7 @@ foreach ($game in $allGames)
         Write-Host "Successfully prepared $gameName for GameVault" -ForegroundColor Green
     } else
     {
-        Write-Host "Failed to prepare $gameName" -ForegroundColor Red
+        Write-Warning "Failed to prepare $gameName"
     }
 
     Write-Host "-----------------------------------------"

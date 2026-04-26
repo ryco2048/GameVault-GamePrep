@@ -39,16 +39,16 @@ $script:GameVaultNameRegex = '\((\d{4})\)$'
 $sevenZipPath = Find-SevenZip
 if (-not $sevenZipPath)
 {
-    Write-Host "ERROR: 7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, or add 7z.exe to PATH." -ForegroundColor Red
+    Write-Error "7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, or add 7z.exe to PATH."
     exit 1
 }
-Write-Host "Using 7-Zip: $sevenZipPath" -ForegroundColor DarkGray
+Write-Verbose "Using 7-Zip: $sevenZipPath"
 
 # Create destination directory if needed
 if (!(Test-Path $destinationDir))
 {
     New-Item -ItemType Directory -Path $destinationDir | Out-Null
-    Write-Host "Created destination directory: $destinationDir" -ForegroundColor Green
+    Write-Verbose "Created destination directory: $destinationDir"
 }
 
 # Collect games from both GOG and Steam sources
@@ -64,7 +64,7 @@ if (Test-Path $gogSourceDir)
     Write-Host "Found $($gogFolders.Count) GOG game folders" -ForegroundColor Green
 } else
 {
-    Write-Host "GOG source directory not found: $gogSourceDir" -ForegroundColor Yellow
+    Write-Warning "GOG source directory not found: $gogSourceDir"
 }
 
 if (Test-Path $steamSourceDir)
@@ -77,12 +77,12 @@ if (Test-Path $steamSourceDir)
     Write-Host "Found $($steamFolders.Count) Steam game folders" -ForegroundColor Green
 } else
 {
-    Write-Host "Steam source directory not found: $steamSourceDir" -ForegroundColor Yellow
+    Write-Warning "Steam source directory not found: $steamSourceDir"
 }
 
 if ($allGames.Count -eq 0)
 {
-    Write-Host "No game folders found in GOG or Steam source directories." -ForegroundColor Yellow
+    Write-Warning "No game folders found in GOG or Steam source directories."
     exit 0
 }
 
@@ -102,17 +102,13 @@ foreach ($game in $allGames)
 
 if ($invalid.Count -gt 0)
 {
-    Write-Host "`nWARNING: $($invalid.Count) folder(s) do not end with a 4-digit year in parentheses and will be SKIPPED:" -ForegroundColor Yellow
-    foreach ($game in $invalid)
-    {
-        Write-Host "  [$($game.Source)] $($game.Name)" -ForegroundColor Yellow
-    }
-    Write-Host "Rename them per GameVault format (e.g. 'Title (W) (2020)') or use Prepare-GamesForGameVault.ps1." -ForegroundColor Yellow
+    $invalidList = ($invalid | ForEach-Object { "  [$($_.Source)] $($_.Name)" }) -join "`n"
+    Write-Warning "$($invalid.Count) folder(s) do not end with a 4-digit year in parentheses and will be SKIPPED:`n$invalidList`nRename them per GameVault format (e.g. 'Title (W) (2020)') or use Prepare-GamesForGameVault.ps1."
 }
 
 if ($valid.Count -eq 0)
 {
-    Write-Host "`nNo validly-named folders to compress." -ForegroundColor Red
+    Write-Error "No validly-named folders to compress."
     exit 1
 }
 
@@ -133,7 +129,7 @@ foreach ($game in $valid)
 
     if (Test-Path $archivePath)
     {
-        Write-Host "  SKIPPED - archive already exists: $archiveName" -ForegroundColor Yellow
+        Write-Host "  SKIPPED (archive exists): $archiveName" -ForegroundColor Yellow
         continue
     }
 
@@ -146,6 +142,7 @@ foreach ($game in $valid)
     } else
     {
         Write-Host "  FAILED (exit code $LASTEXITCODE)" -ForegroundColor Red
+        Write-Error "7-Zip failed for '$($game.Name)' with exit code $LASTEXITCODE" -ErrorAction Continue
         $failed++
     }
 }
