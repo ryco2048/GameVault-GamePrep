@@ -35,6 +35,16 @@ function Find-SevenZip
     return $null
 }
 
+# Sum of all file sizes inside a folder (recursive). Returns 0 on empty/missing.
+function Get-FolderSize
+{
+    param([string]$Path)
+    $sum = (Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue |
+        Measure-Object -Property Length -Sum).Sum
+    if ($null -eq $sum) { return 0 }
+    return [int64]$sum
+}
+
 # Strip characters Windows forbids in filenames and trim whitespace/trailing dots.
 function Format-SafeFileName
 {
@@ -156,7 +166,8 @@ function Build-GameVaultFileName
     return $fileName
 }
 
-# Function to compress a game folder
+# Function to compress a game folder. Writes to <dest>.tmp first and only renames
+# to the final path on success, so partial archives never end up in the output dir.
 function Compress-Game
 {
     param (
@@ -168,30 +179,38 @@ function Compress-Game
 
     Write-Verbose "Compressing $sourcePath to $destinationFile..."
 
-    # Compression command based on level
-    switch ($compressionLevel)
-    {
-        1
-        { # Fast (store only, no compression)
-            & "$SevenZipPath" a -mx=0 -ms=off "$destinationFile" "$sourcePath\*"
-        }
-        5
-        { # Balanced
-            & "$SevenZipPath" a -mx=5 -mmt=on "$destinationFile" "$sourcePath\*"
-        }
-        9
-        { # Maximum compression
-            & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$destinationFile" "$sourcePath\*"
-        }
-    }
+    $tempFile = "$destinationFile.tmp"
+    if (Test-Path $tempFile) { Remove-Item -LiteralPath $tempFile -Force }
 
-    if ($LASTEXITCODE -eq 0)
+    try
     {
+        switch ($compressionLevel)
+        {
+            1
+            { # Fast (store only, no compression)
+                & "$SevenZipPath" a -mx=0 -ms=off "$tempFile" "$sourcePath\*"
+            }
+            5
+            { # Balanced
+                & "$SevenZipPath" a -mx=5 -mmt=on "$tempFile" "$sourcePath\*"
+            }
+            9
+            { # Maximum compression
+                & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempFile" "$sourcePath\*"
+            }
+        }
+
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "7-Zip exited $LASTEXITCODE"
+        }
+        Move-Item -LiteralPath $tempFile -Destination $destinationFile
         Write-Host "Compression completed successfully!" -ForegroundColor Green
         return $true
-    } else
+    } catch
     {
-        Write-Error "Compression failed with exit code $LASTEXITCODE" -ErrorAction Continue
+        if (Test-Path $tempFile) { Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue }
+        Write-Error "Compression failed: $_" -ErrorAction Continue
         return $false
     }
 }
@@ -242,7 +261,22 @@ if ($allGames.Count -eq 0)
     exit 1
 }
 
+# Pre-flight: estimate source size and warn if destination is short on space.
+Write-Verbose "Calculating source folder sizes for free-space check..."
+$totalSourceBytes = 0
+foreach ($g in $allGames) { $totalSourceBytes += Get-FolderSize -Path $g.Path }
+$estArchiveBytes = [int64]($totalSourceBytes * 0.7)
+$destDrive = (Get-Item $DestinationDir).PSDrive
+$freeBytes = $destDrive.Free
+if ($freeBytes -lt $estArchiveBytes)
+{
+    $needGB = [math]::Round($estArchiveBytes / 1GB, 2)
+    $haveGB = [math]::Round($freeBytes / 1GB, 2)
+    Write-Warning "Estimated archives will need ~${needGB} GB; only ${haveGB} GB free on $($destDrive.Name). You may run out partway through."
+}
+
 Write-Host "`nTotal: $($allGames.Count) game folders to process" -ForegroundColor Green
+Write-Host ("Source: {0:N2} GB  |  Free on {1}: {2:N2} GB  |  Est. archives: {3:N2} GB" -f ($totalSourceBytes/1GB), $destDrive.Name, ($freeBytes/1GB), ($estArchiveBytes/1GB))
 Write-Host "-----------------------------------------"
 
 foreach ($game in $allGames)
