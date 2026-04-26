@@ -22,7 +22,12 @@ param(
     # Skip integrity verification (`7z t`) on existing archives before deciding
     # to skip them. By default existing archives that fail verification are
     # re-archived.
-    [switch]$SkipIntegrityCheck
+    [switch]$SkipIntegrityCheck,
+    # Run compressions in parallel runspaces (PowerShell 7+ only). Useful when
+    # source and destination live on different physical drives — otherwise
+    # 7-Zip is already CPU-bound and parallel only thrashes I/O.
+    [switch]$Parallel,
+    [int]$ThrottleLimit = 2
 )
 
 Set-StrictMode -Version Latest
@@ -190,77 +195,182 @@ Write-Host ("-" * 60)
 $success = 0
 $failed  = 0
 
-foreach ($game in $valid)
+if ($Parallel -and $PSVersionTable.PSVersion.Major -ge 7)
 {
-    $archiveName = "$($game.Name).7z"
-    $archivePath = Join-Path $DestinationDir $archiveName
-
-    Write-Host "[$($game.Source)] $($game.Name)" -ForegroundColor Cyan
-
-    if (Test-Path -LiteralPath $archivePath)
+    if ($WhatIfPreference)
     {
-        $skipExisting = $true
-        if ($Force)
+        Write-Warning "-Parallel is incompatible with -WhatIf. Run without -Parallel for dry-run support."
+        exit 0
+    }
+    Write-Host "Mode: PARALLEL (ThrottleLimit=$ThrottleLimit)" -ForegroundColor DarkGray
+    Write-Host ("-" * 60)
+
+    # Capture values for $using: (functions are not serializable into runspaces;
+    # compression logic is inlined inside the parallel block).
+    $p_7z       = $SevenZipPath
+    $p_dest     = $DestinationDir
+    $p_sha256   = $EmitSha256.IsPresent
+    $p_force    = $Force.IsPresent
+    $p_skipTest = $SkipIntegrityCheck.IsPresent
+
+    $results = $valid | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+        $game         = $_
+        $archiveName  = "$($game.Name).7z"
+        $archivePath  = Join-Path $using:p_dest $archiveName
+        $tempArchive  = "$archivePath.tmp"
+
+        # Handle existing archive
+        if (Test-Path -LiteralPath $archivePath)
         {
-            Write-Host "  -Force set: re-archiving existing $archiveName" -ForegroundColor DarkGray
-            $skipExisting = $false
-        } elseif (-not $SkipIntegrityCheck)
-        {
-            & "$SevenZipPath" t "$archivePath" | Out-Null
-            if ($LASTEXITCODE -ne 0)
+            if (-not $using:p_force)
             {
-                Write-Warning "  Existing archive failed integrity check; re-archiving: $archiveName"
-                Remove-Item -LiteralPath $archivePath -Force
-                $skipExisting = $false
+                if (-not $using:p_skipTest)
+                {
+                    & $using:p_7z t "$archivePath" | Out-Null
+                    if ($LASTEXITCODE -eq 0)
+                    {
+                        return [PSCustomObject]@{ Status='SKIPPED'; Name=$game.Name; Source=$game.Source
+                            ArchivePath=$archivePath; SourceBytes=0; ArchiveBytes=0
+                            CompressionRatio=0; Duration=[TimeSpan]::Zero; SHA256=''; Error='' }
+                    }
+                    Remove-Item -LiteralPath $archivePath -Force
+                } else
+                {
+                    return [PSCustomObject]@{ Status='SKIPPED'; Name=$game.Name; Source=$game.Source
+                        ArchivePath=$archivePath; SourceBytes=0; ArchiveBytes=0
+                        CompressionRatio=0; Duration=[TimeSpan]::Zero; SHA256=''; Error='' }
+                }
             }
         }
-        if ($skipExisting)
+
+        if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        Push-Location -LiteralPath $game.Path
+        try
         {
-            Write-Host "  SKIPPED (archive exists): $archiveName" -ForegroundColor Yellow
+            & $using:p_7z a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempArchive" "*" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip exited $LASTEXITCODE" }
+            Move-Item -LiteralPath $tempArchive -Destination $archivePath
+            $sw.Stop()
+
+            $srcBytes = (Get-ChildItem -Path $game.Path -Recurse -File -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+            if ($null -eq $srcBytes) { $srcBytes = 0L }
+            $arcBytes = (Get-Item -LiteralPath $archivePath).Length
+            $ratio    = if ($srcBytes -gt 0) { [math]::Round($arcBytes / $srcBytes, 4) } else { 0 }
+            $hash     = if ($using:p_sha256) { (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash } else { '' }
+
+            return [PSCustomObject]@{
+                Status='OK'; Name=$game.Name; Source=$game.Source
+                ArchivePath=$archivePath; SourceBytes=[int64]$srcBytes; ArchiveBytes=$arcBytes
+                CompressionRatio=$ratio; Duration=$sw.Elapsed; SHA256=$hash; Error=''
+            }
+        } catch
+        {
+            $sw.Stop()
+            if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force -ErrorAction SilentlyContinue }
+            return [PSCustomObject]@{
+                Status='FAILED'; Name=$game.Name; Source=$game.Source
+                ArchivePath=$archivePath; SourceBytes=0; ArchiveBytes=0
+                CompressionRatio=0; Duration=$sw.Elapsed; SHA256=''; Error="$_"
+            }
+        } finally
+        {
+            Pop-Location
+        }
+    }
+
+    # Tally results and write manifest from main thread (avoids concurrent CSV writes).
+    foreach ($r in $results)
+    {
+        switch ($r.Status)
+        {
+            'OK'      {
+                Write-Host ("  OK -> $($r.Name).7z ({0:N1}s)" -f $r.Duration.TotalSeconds) -ForegroundColor Green
+                [PSCustomObject]@{
+                    CompletedAt=''; Name=$r.Name; Source=$r.Source
+                    SourceBytes=$r.SourceBytes; ArchiveBytes=$r.ArchiveBytes
+                    CompressionRatio=$r.CompressionRatio
+                    DurationSeconds=[math]::Round($r.Duration.TotalSeconds,2); SHA256=$r.SHA256
+                } | Export-Csv -LiteralPath $manifestPath -Append -NoTypeInformation -Encoding UTF8
+                $success++
+            }
+            'SKIPPED' { Write-Host "  SKIPPED (archive exists): $($r.Name).7z" -ForegroundColor Yellow }
+            'FAILED'  {
+                Write-Host "  FAILED ($($r.Name)): $($r.Error)" -ForegroundColor Red
+                $failed++
+            }
+        }
+    }
+} else
+{
+    if ($Parallel) { Write-Warning "-Parallel requires PowerShell 7+. Running serially." }
+    Write-Host ("-" * 60)
+
+    foreach ($game in $valid)
+    {
+        $archiveName = "$($game.Name).7z"
+        $archivePath = Join-Path $DestinationDir $archiveName
+
+        Write-Host "[$($game.Source)] $($game.Name)" -ForegroundColor Cyan
+
+        if (Test-Path -LiteralPath $archivePath)
+        {
+            $skipExisting = $true
+            if ($Force)
+            {
+                Write-Host "  -Force set: re-archiving existing $archiveName" -ForegroundColor DarkGray
+                $skipExisting = $false
+            } elseif (-not $SkipIntegrityCheck)
+            {
+                & "$SevenZipPath" t "$archivePath" | Out-Null
+                if ($LASTEXITCODE -ne 0)
+                {
+                    Write-Warning "  Existing archive failed integrity check; re-archiving: $archiveName"
+                    Remove-Item -LiteralPath $archivePath -Force
+                    $skipExisting = $false
+                }
+            }
+            if ($skipExisting)
+            {
+                Write-Host "  SKIPPED (archive exists): $archiveName" -ForegroundColor Yellow
+                continue
+            }
+        }
+
+        if (-not $PSCmdlet.ShouldProcess($archivePath, "7-Zip compress from $($game.Path)"))
+        {
+            Write-Host "  SKIPPED (WhatIf): would compress to $archiveName" -ForegroundColor DarkGray
             continue
         }
-    }
 
-    if (-not $PSCmdlet.ShouldProcess($archivePath, "7-Zip compress from $($game.Path)"))
-    {
-        Write-Host "  SKIPPED (WhatIf): would compress to $archiveName" -ForegroundColor DarkGray
-        continue
-    }
+        $tempArchive = "$archivePath.tmp"
+        if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force }
 
-    # Write to .tmp first; only rename to final name on success so partial
-    # archives never end up in the GameVault-Ready directory.
-    $tempArchive = "$archivePath.tmp"
-    if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force }
-
-    # Push into the source folder so 7-Zip never sees special characters
-    # ([, ], ?, etc.) in the source path that its wildcard parser would
-    # otherwise interpret. Pop in finally so an error doesn't leave us in
-    # the wrong working directory.
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    Push-Location -LiteralPath $game.Path
-    try
-    {
-        & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempArchive" "*" | Out-Null
-        if ($LASTEXITCODE -ne 0)
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        Push-Location -LiteralPath $game.Path
+        try
         {
-            throw "7-Zip exited $LASTEXITCODE"
+            & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempArchive" "*" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip exited $LASTEXITCODE" }
+            Move-Item -LiteralPath $tempArchive -Destination $archivePath
+            $sw.Stop()
+            Write-Host ("  OK -> $archiveName ({0:N1}s)" -f $sw.Elapsed.TotalSeconds) -ForegroundColor Green
+            $sourceBytes = Get-FolderSize -Path $game.Path
+            Add-ManifestEntry -ManifestPath $manifestPath -Name $game.Name -Source $game.Source -ArchivePath $archivePath -SourceBytes $sourceBytes -Duration $sw.Elapsed -IncludeHash:$EmitSha256
+            $success++
+        } catch
+        {
+            $sw.Stop()
+            if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force -ErrorAction SilentlyContinue }
+            Write-Host "  FAILED ($_)" -ForegroundColor Red
+            Write-Error "7-Zip failed for '$($game.Name)': $_" -ErrorAction Continue
+            $failed++
+        } finally
+        {
+            Pop-Location
         }
-        Move-Item -LiteralPath $tempArchive -Destination $archivePath
-        $sw.Stop()
-        Write-Host ("  OK -> $archiveName ({0:N1}s)" -f $sw.Elapsed.TotalSeconds) -ForegroundColor Green
-        $sourceBytes = Get-FolderSize -Path $game.Path
-        Add-ManifestEntry -ManifestPath $manifestPath -Name $game.Name -Source $game.Source -ArchivePath $archivePath -SourceBytes $sourceBytes -Duration $sw.Elapsed -IncludeHash:$EmitSha256
-        $success++
-    } catch
-    {
-        $sw.Stop()
-        if (Test-Path -LiteralPath $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force -ErrorAction SilentlyContinue }
-        Write-Host "  FAILED ($_)" -ForegroundColor Red
-        Write-Error "7-Zip failed for '$($game.Name)': $_" -ErrorAction Continue
-        $failed++
-    } finally
-    {
-        Pop-Location
     }
 }
 
