@@ -18,6 +18,10 @@ Batch compression script for game folders that are **already** named per GameVau
 - Supports all GameVault metadata tags (Early Access, Game Type, No Cache)
 - Automatically creates destination directories if needed
 - Resolves all paths relative to the script (`$PSScriptRoot`), so the repo can live anywhere
+- Auto-detects 7-Zip in standard install locations and on `PATH`; supports a `SEVENZIP_PATH` env-var override
+- Compresses with multithreading enabled (`-mmt=on`) for faster runs on multi-core CPUs
+- `Compress-ForGameVault.ps1` pre-flights folder names against the GameVault format and skips invalid ones before any compression starts
+- `Prepare-GamesForGameVault.ps1` sanitizes user-typed titles to remove characters Windows forbids in filenames
 
 ## Requirements
 
@@ -29,7 +33,16 @@ Batch compression script for game folders that are **already** named per GameVau
 ## Installation
 
 1. Clone this repository or download the scripts
-2. Install 7-Zip (scripts assume `C:\Program Files\7-Zip\7z.exe`). If installed elsewhere, update `$sevenZipPath` at the top of whichever script you run
+2. Install 7-Zip. The scripts auto-discover it in this order:
+   1. `$env:SEVENZIP_PATH` if set
+   2. `C:\Program Files\7-Zip\7z.exe`
+   3. `C:\Program Files (x86)\7-Zip\7z.exe`
+   4. `7z.exe` on `PATH`
+
+   If 7-Zip lives somewhere non-standard, set the override before running:
+   ```powershell
+   $env:SEVENZIP_PATH = "D:\Tools\7-Zip\7z.exe"
+   ```
 3. Place your game folders in the appropriate source directories alongside the scripts:
    - `GOG-Archive\` — GOG game folders
    - `Steam-Archive\` — Steam game folders
@@ -64,14 +77,12 @@ Use this when your folders are not yet named per GameVault conventions.
 .\Prepare-GamesForGameVault.ps1
 ```
 
-4. Follow the prompts for each game found
+4. Follow the prompts for each game found. Title input is sanitized — characters Windows forbids in filenames (`<>:"/\|?*` plus controls) are stripped automatically. Game-type input is validated against the allowed set; invalid values reprompt
 5. Compressed archives are saved to `GameVault-Ready\`
-
-A temporary working directory is created at `%TEMP%\GameVault-Prep` while the script runs.
 
 ### Batch compression (`Compress-ForGameVault.ps1`)
 
-Use this when your folders are already named per GameVault conventions. Each archive is named `<FolderName>.7z` verbatim, so the source folder name **must** already include any tags and the release year (e.g. `Fallout 2 (W) (1998)`).
+Use this when your folders are already named per GameVault conventions. Each archive is named `<FolderName>.7z` verbatim, so the source folder name **must** end with a 4-digit year in parentheses (e.g. `Fallout 2 (W) (1998)`). Folders that don't match this format are reported and skipped before any compression begins.
 
 1. Open PowerShell
 2. Navigate to the script directory
@@ -81,8 +92,9 @@ Use this when your folders are already named per GameVault conventions. Each arc
 .\Compress-ForGameVault.ps1
 ```
 
-4. All folders in `GOG-Archive\` and `Steam-Archive\` are compressed to `GameVault-Ready\` using maximum compression
+4. All validly-named folders in `GOG-Archive\` and `Steam-Archive\` are compressed to `GameVault-Ready\` using maximum compression
 5. Folders whose archive already exists in the destination are skipped automatically
+6. Folders missing the required `(YYYY)` suffix are listed in the warning summary and skipped — rename them or run `Prepare-GamesForGameVault.ps1` to handle them interactively
 
 ## GameVault Naming Convention
 
@@ -116,10 +128,10 @@ For full details, see the [GameVault file naming docs](https://gamevau.lt/docs/s
 | Choice | 7-Zip flags | Notes |
 |--------|-------------|-------|
 | `1` Fast | `-mx=0 -ms=off` | Store only (no compression). Fastest, largest output. |
-| `5` Balanced | `-mx=5` | Default. Good balance of size vs. speed. |
-| `9` Maximum | `-mx=9 -mfb=64 -md=32m -ms=on` | Smallest output, slowest. |
+| `5` Balanced | `-mx=5 -mmt=on` | Default. Good balance of size vs. speed. |
+| `9` Maximum | `-mx=9 -mfb=64 -md=32m -ms=on -mmt=on` | Smallest output, slowest. |
 
-`Compress-ForGameVault.ps1` always uses maximum compression (`-mx=9 -mfb=64 -md=32m -ms=on`).
+`Compress-ForGameVault.ps1` always uses maximum compression (`-mx=9 -mfb=64 -md=32m -ms=on -mmt=on`).
 
 ## Output
 
