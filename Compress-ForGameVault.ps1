@@ -39,6 +39,16 @@ function Find-SevenZip
 # GameVault folder-name validator. Minimum requirement: ends with `(YYYY)`.
 $script:GameVaultNameRegex = '\((\d{4})\)$'
 
+# Sum of all file sizes inside a folder (recursive). Returns 0 on empty/missing.
+function Get-FolderSize
+{
+    param([string]$Path)
+    $sum = (Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue |
+        Measure-Object -Property Length -Sum).Sum
+    if ($null -eq $sum) { return 0 }
+    return [int64]$sum
+}
+
 if (-not $SevenZipPath) { $SevenZipPath = Find-SevenZip }
 if (-not $SevenZipPath -or -not (Test-Path $SevenZipPath))
 {
@@ -118,8 +128,25 @@ if ($valid.Count -eq 0)
     exit 1
 }
 
+# Pre-flight: estimate source size and verify destination has enough free space.
+# Estimate archive size at 70% of source (lz77 typical for game content).
+Write-Verbose "Calculating source folder sizes for free-space check..."
+$totalSourceBytes = 0
+foreach ($game in $valid) { $totalSourceBytes += Get-FolderSize -Path $game.Path }
+$estArchiveBytes = [int64]($totalSourceBytes * 0.7)
+$destDrive = (Get-Item $DestinationDir).PSDrive
+$freeBytes = $destDrive.Free
+if ($freeBytes -lt $estArchiveBytes)
+{
+    $needGB = [math]::Round($estArchiveBytes / 1GB, 2)
+    $haveGB = [math]::Round($freeBytes / 1GB, 2)
+    Write-Error "Insufficient free space on $($destDrive.Name): need ~${needGB} GB, have ${haveGB} GB."
+    exit 1
+}
+
 Write-Host "`nFound $($valid.Count) folder(s) to compress." -ForegroundColor Cyan
 Write-Host "Output -> $DestinationDir"
+Write-Host ("Source: {0:N2} GB  |  Free on {1}: {2:N2} GB  |  Est. archive: {3:N2} GB" -f ($totalSourceBytes/1GB), $destDrive.Name, ($freeBytes/1GB), ($estArchiveBytes/1GB))
 Write-Host "Compression: Maximum (-mx=9 -mfb=64 -md=32m -ms=on -mmt=on)`n"
 Write-Host ("-" * 60)
 
@@ -145,16 +172,26 @@ foreach ($game in $valid)
         continue
     }
 
-    & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$archivePath" "$($game.Path)\*" | Out-Null
+    # Write to .tmp first; only rename to final name on success so partial
+    # archives never end up in the GameVault-Ready directory.
+    $tempArchive = "$archivePath.tmp"
+    if (Test-Path $tempArchive) { Remove-Item $tempArchive -Force }
 
-    if ($LASTEXITCODE -eq 0)
+    try
     {
+        & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$tempArchive" "$($game.Path)\*" | Out-Null
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "7-Zip exited $LASTEXITCODE"
+        }
+        Move-Item -LiteralPath $tempArchive -Destination $archivePath
         Write-Host "  OK -> $archiveName" -ForegroundColor Green
         $success++
-    } else
+    } catch
     {
-        Write-Host "  FAILED (exit code $LASTEXITCODE)" -ForegroundColor Red
-        Write-Error "7-Zip failed for '$($game.Name)' with exit code $LASTEXITCODE" -ErrorAction Continue
+        if (Test-Path $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force -ErrorAction SilentlyContinue }
+        Write-Host "  FAILED ($_)" -ForegroundColor Red
+        Write-Error "7-Zip failed for '$($game.Name)': $_" -ErrorAction Continue
         $failed++
     }
 }
