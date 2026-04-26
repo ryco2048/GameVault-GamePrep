@@ -4,13 +4,16 @@
 
 #Requires -Version 5.1
 
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [string]$GogSourceDir   = (Join-Path $PSScriptRoot "GOG-Archive"),
+    [string]$SteamSourceDir = (Join-Path $PSScriptRoot "Steam-Archive"),
+    [string]$DestinationDir = (Join-Path $PSScriptRoot "GameVault-Ready"),
+    [string]$SevenZipPath
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-# Define source and destination directories
-$gogSourceDir   = Join-Path $PSScriptRoot "GOG-Archive"
-$steamSourceDir = Join-Path $PSScriptRoot "Steam-Archive"
-$destinationDir = Join-Path $PSScriptRoot "GameVault-Ready"
 
 # Locate 7-Zip: env override -> standard install paths -> PATH lookup.
 function Find-SevenZip
@@ -45,19 +48,22 @@ function Format-SafeFileName
     return $sb.ToString().Trim().TrimEnd('.')
 }
 
-$sevenZipPath = Find-SevenZip
-if (-not $sevenZipPath)
+if (-not $SevenZipPath) { $SevenZipPath = Find-SevenZip }
+if (-not $SevenZipPath -or -not (Test-Path $SevenZipPath))
 {
-    Write-Error "7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, or add 7z.exe to PATH."
+    Write-Error "7-Zip not found. Install 7-Zip, set `$env:SEVENZIP_PATH, pass -SevenZipPath, or add 7z.exe to PATH."
     exit 1
 }
-Write-Verbose "Using 7-Zip: $sevenZipPath"
+Write-Verbose "Using 7-Zip: $SevenZipPath"
 
 # Create destination directory if needed
-if (!(Test-Path $destinationDir))
+if (!(Test-Path $DestinationDir))
 {
-    New-Item -ItemType Directory -Path $destinationDir | Out-Null
-    Write-Verbose "Created destination directory: $destinationDir"
+    if ($PSCmdlet.ShouldProcess($DestinationDir, "Create directory"))
+    {
+        New-Item -ItemType Directory -Path $DestinationDir | Out-Null
+        Write-Verbose "Created destination directory: $DestinationDir"
+    }
 }
 
 # Builds a GameVault-compliant archive filename from interactive user input.
@@ -167,15 +173,15 @@ function Compress-Game
     {
         1
         { # Fast (store only, no compression)
-            & "$sevenZipPath" a -mx=0 -ms=off "$destinationFile" "$sourcePath\*"
+            & "$SevenZipPath" a -mx=0 -ms=off "$destinationFile" "$sourcePath\*"
         }
         5
         { # Balanced
-            & "$sevenZipPath" a -mx=5 -mmt=on "$destinationFile" "$sourcePath\*"
+            & "$SevenZipPath" a -mx=5 -mmt=on "$destinationFile" "$sourcePath\*"
         }
         9
         { # Maximum compression
-            & "$sevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$destinationFile" "$sourcePath\*"
+            & "$SevenZipPath" a -mx=9 -mfb=64 -md=32m -ms=on -mmt=on "$destinationFile" "$sourcePath\*"
         }
     }
 
@@ -195,9 +201,9 @@ function Compress-Game
 $allGames = @()
 
 # Check GOG directory
-if (Test-Path $gogSourceDir)
+if (Test-Path $GogSourceDir)
 {
-    $gogFolders = Get-ChildItem -Path $gogSourceDir -Directory
+    $gogFolders = Get-ChildItem -Path $GogSourceDir -Directory
     foreach ($folder in $gogFolders)
     {
         $allGames += [PSCustomObject]@{
@@ -209,13 +215,13 @@ if (Test-Path $gogSourceDir)
     Write-Host "Found $($gogFolders.Count) GOG game folders" -ForegroundColor Green
 } else
 {
-    Write-Warning "GOG source directory not found: $gogSourceDir"
+    Write-Warning "GOG source directory not found: $GogSourceDir"
 }
 
 # Check Steam directory
-if (Test-Path $steamSourceDir)
+if (Test-Path $SteamSourceDir)
 {
-    $steamFolders = Get-ChildItem -Path $steamSourceDir -Directory
+    $steamFolders = Get-ChildItem -Path $SteamSourceDir -Directory
     foreach ($folder in $steamFolders)
     {
         $allGames += [PSCustomObject]@{
@@ -227,7 +233,7 @@ if (Test-Path $steamSourceDir)
     Write-Host "Found $($steamFolders.Count) Steam game folders" -ForegroundColor Green
 } else
 {
-    Write-Warning "Steam source directory not found: $steamSourceDir"
+    Write-Warning "Steam source directory not found: $SteamSourceDir"
 }
 
 if ($allGames.Count -eq 0)
@@ -246,7 +252,7 @@ foreach ($game in $allGames)
     $gameSource = $game.Source
 
     $fileName = Build-GameVaultFileName -gameFolderName $gameName -gameSource $gameSource
-    $destinationFile = Join-Path -Path $destinationDir -ChildPath $fileName
+    $destinationFile = Join-Path -Path $DestinationDir -ChildPath $fileName
 
     Write-Host "`nProcessing: $gameName ($gameSource)" -ForegroundColor Cyan
     Write-Host "Target file: $fileName" -ForegroundColor Cyan
@@ -255,6 +261,13 @@ foreach ($game in $allGames)
     if ([string]::IsNullOrWhiteSpace($compressionChoice) -or !($compressionChoice -match '^[159]$'))
     {
         $compressionChoice = 5
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($destinationFile, "7-Zip compress from $gamePath"))
+    {
+        Write-Host "SKIPPED (WhatIf): would write $fileName" -ForegroundColor DarkGray
+        Write-Host "-----------------------------------------"
+        continue
     }
 
     $success = Compress-Game -sourcePath $gamePath -destinationFile $destinationFile -compressionLevel ([int]$compressionChoice)
@@ -270,5 +283,5 @@ foreach ($game in $allGames)
     Write-Host "-----------------------------------------"
 }
 
-Write-Host "`nAll games have been processed. GameVault-ready games are in: $destinationDir" -ForegroundColor Green
+Write-Host "`nAll games have been processed. GameVault-ready games are in: $DestinationDir" -ForegroundColor Green
 Write-Host "You can now copy these files to your GameVault server's /files directory." -ForegroundColor Green
