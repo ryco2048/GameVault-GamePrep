@@ -60,8 +60,8 @@ if (!(Test-Path $destinationDir))
     Write-Host "Created destination directory: $destinationDir"
 }
 
-# Function to get game information from user
-function Get-GameInfo
+# Builds a GameVault-compliant archive filename from interactive user input.
+function Build-GameVaultFileName
 {
     param (
         [string]$gameFolderName,
@@ -109,10 +109,16 @@ function Get-GameInfo
     { ""
     }
 
-    $releaseYear = Read-Host "Enter release year (e.g., 2023) (required)"
-    while ([string]::IsNullOrWhiteSpace($releaseYear) -or !($releaseYear -match '^\d{4}$'))
+    $minYear = 1970
+    $maxYear = (Get-Date).Year + 1
+    $releaseYear = Read-Host "Enter release year (e.g., 2023) (required, $minYear-$maxYear)"
+    while ($true)
     {
-        Write-Host "Release year is required and must be a 4-digit number." -ForegroundColor Yellow
+        if ($releaseYear -match '^\d{4}$' -and [int]$releaseYear -ge $minYear -and [int]$releaseYear -le $maxYear)
+        {
+            break
+        }
+        Write-Host "Release year must be a 4-digit number between $minYear and $maxYear." -ForegroundColor Yellow
         $releaseYear = Read-Host "Enter release year (e.g., 2023)"
     }
 
@@ -239,7 +245,7 @@ foreach ($game in $allGames)
     $gamePath = $game.Path
     $gameSource = $game.Source
 
-    $fileName = Get-GameInfo -gameFolderName $gameName -gameSource $gameSource
+    $fileName = Build-GameVaultFileName -gameFolderName $gameName -gameSource $gameSource
     $destinationFile = Join-Path -Path $destinationDir -ChildPath $fileName
 
     Write-Host "`nProcessing: $gameName ($gameSource)" -ForegroundColor Cyan
