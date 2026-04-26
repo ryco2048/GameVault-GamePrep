@@ -74,6 +74,42 @@ function Add-ManifestEntry
     $row | Export-Csv -LiteralPath $ManifestPath -Append -NoTypeInformation -Encoding UTF8
 }
 
+# Parse an existing folder name into GameVault field defaults.
+# Strips known tags from the end so the remaining string becomes the title.
+function Get-FolderNameDefaults
+{
+    param([string]$FolderName)
+    $d = @{ Title=$FolderName; Version=''; EarlyAccess='n'; GameType='W'; NoCache='n'; ReleaseYear='' }
+
+    if ($FolderName -match '\((\d{4})\)$')
+    {
+        $d.ReleaseYear = $Matches[1]
+        $FolderName = ($FolderName -replace '\s*\(\d{4}\)$', '').TrimEnd()
+    }
+    if ($FolderName -match '\((NC)\)')
+    {
+        $d.NoCache = 'y'
+        $FolderName = ($FolderName -replace '\s*\(NC\)', '').TrimEnd()
+    }
+    if ($FolderName -match '\((W_S|W|L|M|A)\)')
+    {
+        $d.GameType = $Matches[1]
+        $FolderName = ($FolderName -replace '\s*\((W_S|W|L|M|A)\)', '').TrimEnd()
+    }
+    if ($FolderName -match '\((EA)\)')
+    {
+        $d.EarlyAccess = 'y'
+        $FolderName = ($FolderName -replace '\s*\(EA\)', '').TrimEnd()
+    }
+    if ($FolderName -match '\((v[^)]+)\)')
+    {
+        $d.Version = $Matches[1]
+        $FolderName = ($FolderName -replace '\s*\(v[^)]+\)', '').TrimEnd()
+    }
+    $d.Title = $FolderName.Trim()
+    return $d
+}
+
 # Strip characters Windows forbids in filenames and trim whitespace/trailing dots.
 function Format-SafeFileName
 {
@@ -106,29 +142,39 @@ if (!(Test-Path $DestinationDir))
 }
 
 # Builds a GameVault-compliant archive filename from interactive user input.
+# $Defaults hashtable (from Get-FolderNameDefaults) pre-fills each prompt.
 function Build-GameVaultFileName
 {
     param (
         [string]$gameFolderName,
-        [string]$gameSource
+        [string]$gameSource,
+        [hashtable]$Defaults = @{}
     )
+
+    $defTitle  = if ($Defaults.Title)       { $Defaults.Title }       else { $gameFolderName }
+    $defVer    = if ($Defaults.Version)     { $Defaults.Version }     else { '' }
+    $defEA     = if ($Defaults.EarlyAccess) { $Defaults.EarlyAccess } else { 'n' }
+    $defType   = if ($Defaults.GameType)    { $Defaults.GameType }    else { 'W' }
+    $defNC     = if ($Defaults.NoCache)     { $Defaults.NoCache }     else { 'n' }
+    $defYear   = if ($Defaults.ReleaseYear) { $Defaults.ReleaseYear } else { '' }
 
     Write-Host "`nPreparing game: $gameFolderName (Source: $gameSource)" -ForegroundColor Cyan
 
-    $title = Read-Host "Enter game title (default: $gameFolderName)"
-    if ([string]::IsNullOrWhiteSpace($title))
-    { $title = $gameFolderName
-    }
+    $title = Read-Host "Enter game title (default: $defTitle)"
+    if ([string]::IsNullOrWhiteSpace($title)) { $title = $defTitle }
     $title = Format-SafeFileName -Name $title
     if ([string]::IsNullOrWhiteSpace($title))
     {
         throw "Title became empty after sanitization. Aborting."
     }
 
-    $version = Read-Host "Enter game version (e.g., v1.2.3) (optional)"
+    $verPrompt = if ($defVer) { "(default: $defVer)" } else { "(optional)" }
+    $version = Read-Host "Enter game version e.g. v1.2.3 $verPrompt"
+    if ([string]::IsNullOrWhiteSpace($version)) { $version = $defVer }
     if ($version) { $version = Format-SafeFileName -Name $version }
 
-    $earlyAccess = Read-Host "Is this an Early Access game? (y/n) (default: n)"
+    $earlyAccess = Read-Host "Is this an Early Access game? (y/n) (default: $defEA)"
+    if ([string]::IsNullOrWhiteSpace($earlyAccess)) { $earlyAccess = $defEA }
     $earlyAccessTag = if ($earlyAccess -eq "y")
     { "EA"
     } else
@@ -136,18 +182,17 @@ function Build-GameVaultFileName
     }
 
     $allowedTypes = @('W_S','W','L','M','A')
-    $gameType = Read-Host "Enter game type (W_S, W, L, M, A) (default: W)"
-    if ([string]::IsNullOrWhiteSpace($gameType))
-    { $gameType = "W"
-    }
+    $gameType = Read-Host "Enter game type (W_S, W, L, M, A) (default: $defType)"
+    if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = $defType }
     while ($gameType -notin $allowedTypes)
     {
         Write-Warning "Invalid game type. Must be one of: $($allowedTypes -join ', ')"
         $gameType = Read-Host "Enter game type (W_S, W, L, M, A)"
-        if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = "W" }
+        if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = $defType }
     }
 
-    $noCache = Read-Host "Disable caching for this game? (y/n) (default: n)"
+    $noCache = Read-Host "Disable caching for this game? (y/n) (default: $defNC)"
+    if ([string]::IsNullOrWhiteSpace($noCache)) { $noCache = $defNC }
     $noCacheTag = if ($noCache -eq "y")
     { "NC"
     } else
@@ -156,7 +201,9 @@ function Build-GameVaultFileName
 
     $minYear = 1970
     $maxYear = (Get-Date).Year + 1
-    $releaseYear = Read-Host "Enter release year (e.g., 2023) (required, $minYear-$maxYear)"
+    $yearPrompt = if ($defYear) { "required, $minYear-$maxYear, default: $defYear" } else { "required, $minYear-$maxYear" }
+    $releaseYear = Read-Host "Enter release year ($yearPrompt)"
+    if ([string]::IsNullOrWhiteSpace($releaseYear)) { $releaseYear = $defYear }
     while ($true)
     {
         if ($releaseYear -match '^\d{4}$' -and [int]$releaseYear -ge $minYear -and [int]$releaseYear -le $maxYear)
@@ -165,6 +212,7 @@ function Build-GameVaultFileName
         }
         Write-Warning "Release year must be a 4-digit number between $minYear and $maxYear."
         $releaseYear = Read-Host "Enter release year (e.g., 2023)"
+        if ([string]::IsNullOrWhiteSpace($releaseYear)) { $releaseYear = $defYear }
     }
 
     # Build filename according to GameVault naming convention
@@ -312,22 +360,47 @@ Write-Host ("Source: {0:N2} GB  |  Free on {1}: {2:N2} GB  |  Est. archives: {3:
 if ($EmitSha256) { Write-Host "SHA256 hashing: ON (slower)" -ForegroundColor DarkGray }
 Write-Host "-----------------------------------------"
 
+# P8: ask for session-wide default compression level once up front.
+$sessionDefault = Read-Host "`nDefault compression level for all games: 1 (Fast), 5 (Balanced), 9 (Maximum) (default: 5)"
+if ([string]::IsNullOrWhiteSpace($sessionDefault) -or !($sessionDefault -match '^[159]$'))
+{
+    $sessionDefault = '5'
+}
+Write-Host "Session default: level $sessionDefault (override per game)`n"
+Write-Host "-----------------------------------------"
+
 foreach ($game in $allGames)
 {
-    $gameName = $game.Name
-    $gamePath = $game.Path
+    $gameName   = $game.Name
+    $gamePath   = $game.Path
     $gameSource = $game.Source
 
-    $fileName = Build-GameVaultFileName -gameFolderName $gameName -gameSource $gameSource
+    # P7: let user skip this game or quit the whole run before any prompts fire.
+    Write-Host "`n[$gameSource] $gameName" -ForegroundColor Cyan
+    $intent = Read-Host "  Enter=process  s=skip  q=quit"
+    if ($intent -eq 'q')
+    {
+        Write-Host "Quitting. Games processed so far are in: $DestinationDir" -ForegroundColor Yellow
+        break
+    }
+    if ($intent -eq 's')
+    {
+        Write-Host "  Skipped." -ForegroundColor DarkGray
+        Write-Host "-----------------------------------------"
+        continue
+    }
+
+    # P6: parse existing folder name to pre-fill prompts.
+    $defaults = Get-FolderNameDefaults -FolderName $gameName
+    $fileName = Build-GameVaultFileName -gameFolderName $gameName -gameSource $gameSource -Defaults $defaults
     $destinationFile = Join-Path -Path $DestinationDir -ChildPath $fileName
 
-    Write-Host "`nProcessing: $gameName ($gameSource)" -ForegroundColor Cyan
     Write-Host "Target file: $fileName" -ForegroundColor Cyan
 
-    $compressionChoice = Read-Host "Select compression level: 1 (Fast), 5 (Balanced), 9 (Maximum) (default: 5)"
+    $compressionChoice = Read-Host "Select compression level: 1 (Fast), 5 (Balanced), 9 (Maximum) (default: $sessionDefault)"
     if ([string]::IsNullOrWhiteSpace($compressionChoice) -or !($compressionChoice -match '^[159]$'))
     {
-        $compressionChoice = 5
+        $compressionChoice = $sessionDefault
     }
 
     if (-not $PSCmdlet.ShouldProcess($destinationFile, "7-Zip compress from $gamePath"))
