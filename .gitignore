@@ -11,3 +11,7 @@ GameVault-Ready/
 .claude/
 .claude.json
 CLAUDE.local.md
+
+# Conductor (conductor.build)
+.context/
+.conductor/
