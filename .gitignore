@@ -6,3 +6,8 @@ Thumbs.db
 GOG-Archive/
 Steam-Archive/
 GameVault-Ready/
+
+# Claude Code
+.claude/
+.claude.json
+CLAUDE.local.md
