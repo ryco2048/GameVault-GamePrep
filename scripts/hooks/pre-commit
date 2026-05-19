@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: scan staged changes for secrets with gitleaks.
+# Bypass (use sparingly): git commit --no-verify
+
+set -e
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks not installed. Install: brew install gitleaks (macOS) or see https://github.com/gitleaks/gitleaks"
+  echo "Skipping secret scan."
+  exit 0
+fi
+
+gitleaks protect --staged --redact --verbose

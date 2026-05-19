@@ -15,3 +15,7 @@ CLAUDE.local.md
 # Conductor (conductor.build)
 .context/
 .conductor/
+
+# gitleaks
+gitleaks-report.*
+.gitleaks.cache

@@ -196,6 +196,32 @@ Both scripts accept these parameters (all have sensible defaults):
 
 Keep 7-Zip on the latest stable release. Older builds have known CVEs; check [7-zip.org](https://www.7-zip.org/) for the current version.
 
+### Secret scanning (gitleaks)
+
+This repo ships a [gitleaks](https://github.com/gitleaks/gitleaks) pre-commit hook that blocks commits containing leaked credentials.
+
+**One-time setup after cloning:**
+
+1. Install gitleaks:
+   ```bash
+   # macOS
+   brew install gitleaks
+
+   # Linux / Windows — see https://github.com/gitleaks/gitleaks#installing
+   ```
+2. Wire up the tracked hooks:
+   ```bash
+   bash scripts/install-hooks.sh
+   ```
+
+The hook runs `gitleaks protect --staged` on every commit. Configuration lives in `.gitleaks.toml`. To bypass for a known false positive: `git commit --no-verify`.
+
+To scan the full history manually:
+
+```bash
+gitleaks detect --source . --verbose --redact
+```
+
 ## License
 
 Released under the [MIT License](LICENSE).

@@ -1,0 +1,42 @@
+# gitleaks config for GameVault-GamePrep
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+#
+# Extends the built-in default ruleset; add allowlists and custom rules below.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global allowlist for this repo"
+
+# Paths that should never be scanned (large binaries, archives, generated output).
+paths = [
+  '''(?i)\.7z$''',
+  '''(?i)\.zip$''',
+  '''(?i)\.exe$''',
+  '''(?i)gamevault-ready/''',
+  '''(?i)gog-archive/''',
+  '''(?i)steam-archive/''',
+  '''(?i)\.git/''',
+]
+
+# Commit SHAs to ignore (use sparingly — prefer fixing the secret).
+# commits = []
+
+# Stop-words: matches in these strings are ignored repo-wide.
+# Add deliberate placeholders here, e.g. example tokens used in docs.
+stopwords = [
+  "example",
+  "placeholder",
+  "your-token-here",
+  "REPLACE_ME",
+]
+
+# Custom rule example (disabled by default).
+# Uncomment to flag potential GameVault API tokens if you ever add API support.
+#
+# [[rules]]
+# id = "gamevault-api-token"
+# description = "GameVault API token"
+# regex = '''(?i)gamevault[_-]?(api[_-]?)?(token|key|secret)[\s:=]+['"]?([a-z0-9]{32,})'''
+# tags = ["key", "gamevault"]
