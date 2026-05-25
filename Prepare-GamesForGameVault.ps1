@@ -86,25 +86,25 @@ function Get-FolderNameDefaults
         $d.ReleaseYear = $Matches[1]
         $FolderName = ($FolderName -replace '\s*\(\d{4}\)$', '').TrimEnd()
     }
-    if ($FolderName -match '\((NC)\)')
+    if ($FolderName -match '\((NC)\)$')
     {
         $d.NoCache = 'y'
-        $FolderName = ($FolderName -replace '\s*\(NC\)', '').TrimEnd()
+        $FolderName = ($FolderName -replace '\s*\(NC\)$', '').TrimEnd()
     }
-    if ($FolderName -match '\((W_S|W|L|M|A)\)')
+    if ($FolderName -match '\((W_S|W|L|M|A)\)$')
     {
         $d.GameType = $Matches[1]
-        $FolderName = ($FolderName -replace '\s*\((W_S|W|L|M|A)\)', '').TrimEnd()
+        $FolderName = ($FolderName -replace '\s*\((W_S|W|L|M|A)\)$', '').TrimEnd()
     }
-    if ($FolderName -match '\((EA)\)')
+    if ($FolderName -match '\((EA)\)$')
     {
         $d.EarlyAccess = 'y'
-        $FolderName = ($FolderName -replace '\s*\(EA\)', '').TrimEnd()
+        $FolderName = ($FolderName -replace '\s*\(EA\)$', '').TrimEnd()
     }
-    if ($FolderName -match '\((v[^)]+)\)')
+    if ($FolderName -match '\((v[^)]+)\)$')
     {
         $d.Version = $Matches[1]
-        $FolderName = ($FolderName -replace '\s*\(v[^)]+\)', '').TrimEnd()
+        $FolderName = ($FolderName -replace '\s*\(v[^)]+\)$', '').TrimEnd()
     }
     $d.Title = $FolderName.Trim()
     return $d
@@ -343,7 +343,8 @@ Write-Verbose "Calculating source folder sizes for free-space check..."
 $totalSourceBytes = 0
 foreach ($g in $allGames) { $totalSourceBytes += Get-FolderSize -Path $g.Path }
 $estArchiveBytes = [int64]($totalSourceBytes * 0.7)
-$destDrive = (Get-Item $DestinationDir).PSDrive
+$destRoot  = if ([System.IO.Path]::IsPathRooted($DestinationDir)) { $DestinationDir } else { Join-Path (Get-Location) $DestinationDir }
+$destDrive = Get-PSDrive -Name (Split-Path -Path $destRoot -Qualifier).TrimEnd(':')
 $freeBytes = $destDrive.Free
 if ($freeBytes -lt $estArchiveBytes)
 {

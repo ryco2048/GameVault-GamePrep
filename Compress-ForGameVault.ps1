@@ -171,7 +171,8 @@ Write-Verbose "Calculating source folder sizes for free-space check..."
 $totalSourceBytes = 0
 foreach ($game in $valid) { $totalSourceBytes += Get-FolderSize -Path $game.Path }
 $estArchiveBytes = [int64]($totalSourceBytes * 0.7)
-$destDrive = (Get-Item $DestinationDir).PSDrive
+$destRoot  = if ([System.IO.Path]::IsPathRooted($DestinationDir)) { $DestinationDir } else { Join-Path (Get-Location) $DestinationDir }
+$destDrive = Get-PSDrive -Name (Split-Path -Path $destRoot -Qualifier).TrimEnd(':')
 $freeBytes = $destDrive.Free
 if ($freeBytes -lt $estArchiveBytes)
 {
@@ -289,7 +290,7 @@ if ($Parallel -and $PSVersionTable.PSVersion.Major -ge 7)
             'OK'      {
                 Write-Host ("  OK -> $($r.Name).7z ({0:N1}s)" -f $r.Duration.TotalSeconds) -ForegroundColor Green
                 [PSCustomObject]@{
-                    CompletedAt=''; Name=$r.Name; Source=$r.Source
+                    CompletedAt=(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'); Name=$r.Name; Source=$r.Source
                     SourceBytes=$r.SourceBytes; ArchiveBytes=$r.ArchiveBytes
                     CompressionRatio=$r.CompressionRatio
                     DurationSeconds=[math]::Round($r.Duration.TotalSeconds,2); SHA256=$r.SHA256
