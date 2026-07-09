@@ -24,12 +24,13 @@ bash scripts/install-hooks.sh   # sets core.hooksPath → scripts/hooks
 
 ```powershell
 # Prepare-GamesForGameVault.ps1 — interactive; prompts for title, year, source
-.\Prepare-GamesForGameVault.ps1 [-EmitSha256]
+.\Prepare-GamesForGameVault.ps1 [-SkipSteamCleanup] [-EmitSha256]
 
 # Compress-ForGameVault.ps1 — batch; folders must already be named correctly
-.\Compress-ForGameVault.ps1 [-Force] [-SkipIntegrityCheck] [-Parallel] [-EmitSha256]
+.\Compress-ForGameVault.ps1 [-Force] [-SkipIntegrityCheck] [-Parallel] [-Cleanup] [-EmitSha256]
 # -Parallel only helps when source and dest are on different physical drives
 # Custom sources: -Sources @{ GOG='D:\GOG'; Itch='E:\Itch' }
+# Steam cleanup: -Cleanup removes DRM DLLs, redist, logs, crash dumps
 ```
 
 ## Folder Naming Convention
@@ -37,6 +38,10 @@ bash scripts/install-hooks.sh   # sets core.hooksPath → scripts/hooks
 GameVault requires: `Game Title (YYYY)` — must end with `(4-digit year)`.
 `Prepare-GamesForGameVault.ps1` enforces this interactively.
 `Compress-ForGameVault.ps1` validates and skips non-conforming folders.
+- Steam cleanup: `-SkipSteamCleanup` (Prepare) / `-Cleanup` (Compress) controls removal of junk files before archiving
+
+**Game-type tags:** `W_S` (Win Store), `W_P` (Win Portable, Steam default), `W` (Windows), `L`, `M`, `A`.
+Gotcha: in game-type alternation regexes, order longer prefixes first (`W_S|W_P|W|…`) — bare `W` otherwise steals `W_P`/`W_S` matches.
 
 ## Outputs
 

@@ -1,5 +1,8 @@
 # GameVault Game Preparation Scripts
 
+[![gitleaks](https://github.com/almost486/GameVault-GamePrep/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/almost486/GameVault-GamePrep/actions/workflows/gitleaks.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 PowerShell scripts that automate preparing GOG and Steam games for [GameVault](https://gamevau.lt/) by compressing them into `.7z` archives that follow GameVault's required naming format.
 
 ## Scripts
@@ -13,6 +16,7 @@ Batch compression script for game folders that are **already** named per GameVau
 ## Features
 
 - Supports both GOG and Steam game sources
+- Steam cleanup mode automatically removes DRM DLLs, redistributables, crash logs, and other junk from Steam game folders before compression, with a preview and confirmation prompt
 - Compresses game folders using 7-Zip
 - Follows GameVault's naming convention requirements
 - Supports all GameVault metadata tags (Early Access, Game Type, No Cache)
@@ -85,8 +89,9 @@ Use this when your folders are not yet named per GameVault conventions.
 
 4. Choose a session-wide default compression level (can override per game)
 5. For each game: press **Enter** to process, **s** to skip, or **q** to quit. If the folder name already follows GameVault conventions, all metadata prompts are pre-filled — just press Enter to accept
-6. Title input is sanitized automatically. Game-type is validated; invalid values reprompt. Year is validated against the range 1970–(current year + 1)
-7. Compressed archives are saved to `GameVault-Ready\`; a row is appended to `GameVault-Ready\manifest.csv` after each success
+6. For Steam game sources, the script scans for and offers to remove Steam-specific files (DRM DLLs, redistributables, crash logs, etc.) before compressing. Steam games default to `W_P` (Windows Portable) game type. Pass `-SkipSteamCleanup` to disable this behavior.
+7. Title input is sanitized automatically. Game-type is validated; invalid values reprompt. Year is validated against the range 1970–(current year + 1)
+8. Compressed archives are saved to `GameVault-Ready\`; a row is appended to `GameVault-Ready\manifest.csv` after each success
 
 ### Batch compression (`Compress-ForGameVault.ps1`)
 
@@ -101,8 +106,9 @@ Use this when your folders are already named per GameVault conventions. Each arc
 ```
 
 4. All validly-named folders in the source directories are compressed to `GameVault-Ready\` using maximum compression; a row is appended to `GameVault-Ready\manifest.csv` after each success
-5. Folders whose archive already exists are integrity-tested with `7z t` before being skipped. Corrupt archives are deleted and rebuilt. Pass `-SkipIntegrityCheck` to skip the test, or `-Force` to always re-archive
-6. Folders missing the required `(YYYY)` suffix are reported and skipped — rename them or run `Prepare-GamesForGameVault.ps1` to handle them interactively
+5. Steam sources: pass `-Cleanup` to automatically scan and remove known junk files (DRM DLLs, redistributables, logs, crash dumps, engine build artifacts) before compression, with a preview and confirmation prompt. This is off by default to preserve backward compatibility.
+6. Folders whose archive already exists are integrity-tested with `7z t` before being skipped. Corrupt archives are deleted and rebuilt. Pass `-SkipIntegrityCheck` to skip the test, or `-Force` to always re-archive
+7. Folders missing the required `(YYYY)` suffix are reported and skipped — rename them or run `Prepare-GamesForGameVault.ps1` to handle them interactively
 
 ## GameVault Naming Convention
 
@@ -119,6 +125,7 @@ Where:
 - **GameType** — game platform type:
   - `W_S` — Windows Store
   - `W` — Windows
+  - `W_P` — Windows Portable (default for Steam sources)
   - `L` — Linux
   - `M` — Mac
   - `A` — Android
@@ -140,6 +147,19 @@ For full details, see the [GameVault file naming docs](https://gamevau.lt/docs/s
 | `9` Maximum | `-mx=9 -mfb=64 -md=32m -ms=on -mmt=on` | Smallest output, slowest. |
 
 `Compress-ForGameVault.ps1` always uses maximum compression (`-mx=9 -mfb=64 -md=32m -ms=on -mmt=on`).
+
+## Steam Cleanup Notes
+
+When enabled, the scripts scan Steam game folders for files that are safe to remove:
+
+- **Steam DRM DLLs:** `steam_api.dll`, `steam_api64.dll`, `steam_appid.txt`
+- **Redistributable installers:** `_CommonRedist/`, `_CommonInstaller/`, standalone `.exe` installers
+- **Crash reports and logs:** `*.dmp`, `*.mdmp`, `*.crash`, `*.log`, `UnityCrashHandler*.exe`, `CrashReporter*.exe`
+- **Build artifacts:** `_BackUpThisFolder_ButDontShipItWithYourGame/`, `BurstDebugInformation/`, `*.pdb`
+- **Telemetry and recordings:** `Recording/`, `Screenshots/`, `Telemetry/`
+- **Legal/license files:** `EULA.*`, `ThirdPartyLegalNotices.*`
+
+**Note on steam_api.dll:** Removing these files means the game will run without the Steam client. Some games that hard-depend on Steamworks may crash without these DLLs. For those games, you may need a Steamworks stub/emulator (such as Goldberg Emulator). The cleanup preview shows these files so you can review before confirming.
 
 ## Output
 
@@ -173,12 +193,13 @@ Both scripts accept these parameters (all have sensible defaults):
 | `-SkipIntegrityCheck` | `switch` | off | Skip `7z t` test on existing archives before deciding to skip. |
 | `-Parallel` | `switch` | off | Fan out compressions across runspaces (PS 7+ only). |
 | `-ThrottleLimit` | `int` | `2` | Max concurrent jobs when `-Parallel` is set. |
+| `-Cleanup` | `switch` | off | For Steam sources: scan and remove junk (DRM DLLs, redist, logs, crash dumps) before compressing. Shows preview and asks for confirmation per game. |
 | `-EmitSha256` | `switch` | off | Compute and record SHA-256 of each archive in the manifest. |
 | `-WhatIf` | `switch` | off | Dry-run: report what would be compressed without writing. |
 
 ```powershell
-# Example: custom sources, parallel, 3 threads
-.\Compress-ForGameVault.ps1 -Sources @{ GOG='D:\GOG'; Itch='E:\Itch' } -Parallel -ThrottleLimit 3
+# Example: custom sources, parallel, Steam cleanup, 3 threads
+.\Compress-ForGameVault.ps1 -Sources @{ GOG='D:\GOG'; Itch='E:\Itch' } -Cleanup -Parallel -ThrottleLimit 3
 ```
 
 ### `Prepare-GamesForGameVault.ps1`
@@ -190,6 +211,7 @@ Both scripts accept these parameters (all have sensible defaults):
 | `-DestinationDir` | `string` | `.\GameVault-Ready` | Output directory for archives and manifest. |
 | `-SevenZipPath` | `string` | auto-detected | Path to `7z.exe`. Overrides `$env:SEVENZIP_PATH`. |
 | `-EmitSha256` | `switch` | off | Compute and record SHA-256 of each archive in the manifest. |
+| `-SkipSteamCleanup` | `switch` | off | Skip the Steam folder cleanup step. Compress raw Steam folders as-is. |
 | `-WhatIf` | `switch` | off | Dry-run: report what would be compressed without writing. |
 
 ## Security Note
