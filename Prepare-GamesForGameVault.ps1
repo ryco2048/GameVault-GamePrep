@@ -10,7 +10,8 @@ param(
     [string]$SteamSourceDir = (Join-Path $PSScriptRoot "Steam-Archive"),
     [string]$DestinationDir = (Join-Path $PSScriptRoot "GameVault-Ready"),
     [string]$SevenZipPath,
-    [switch]$EmitSha256
+    [switch]$EmitSha256,
+    [switch]$SkipSteamCleanup
 )
 
 Set-StrictMode -Version Latest
@@ -91,10 +92,10 @@ function Get-FolderNameDefaults
         $d.NoCache = 'y'
         $FolderName = ($FolderName -replace '\s*\(NC\)$', '').TrimEnd()
     }
-    if ($FolderName -match '\((W_S|W|L|M|A)\)$')
+    if ($FolderName -match '\((W_S|W_P|W|L|M|A)\)$')
     {
         $d.GameType = $Matches[1]
-        $FolderName = ($FolderName -replace '\s*\((W_S|W|L|M|A)\)$', '').TrimEnd()
+        $FolderName = ($FolderName -replace '\s*\((W_S|W_P|W|L|M|A)\)$', '').TrimEnd()
     }
     if ($FolderName -match '\((EA)\)$')
     {
@@ -121,6 +122,137 @@ function Format-SafeFileName
         if ($invalid -notcontains $ch) { [void]$sb.Append($ch) }
     }
     return $sb.ToString().Trim().TrimEnd('.')
+}
+
+# Scans a Steam game folder for files safe to remove before repacking as portable.
+# Returns @{Items=@(); TotalBytes=[int64]} where Items is an array of
+# PSCustomObjects with Name/Path/Type/Length.
+function Get-SteamCleanupItems
+{
+    param([string]$Path)
+
+    $filePatterns = @(
+        'steam_api.dll', 'steam_api64.dll', 'steam_appid.txt',
+        'UnityCrashHandler*.exe', 'CrashReporter*.exe', 'CrashSender*.exe',
+        'CrashUploader*.exe', 'REDEngineErrorReporter.exe',
+        'steam_monitor.exe', 'steamsysinfo.exe', 'steamerrorreporter*.exe',
+        'WriteMiniDump.exe',
+        '*.dmp', '*.mdmp', '*.crash',
+        '*.log', 'output_log.txt', 'Player.log', 'Player-prev.log',
+        'EULA.*', 'ThirdPartyLegalNotices.*',
+        '*.pdb', '*.url', '*.nfo'
+    )
+    $dirPatterns = @(
+        '_CommonRedist', '_CommonInstaller', '_Installer',
+        'CrashReport*', 'Crashes', 'dumps', 'Logs', 'logs',
+        'Recording', 'Screenshots',
+        '_BackUpThisFolder_ButDontShipItWithYourGame',
+        'BurstDebugInformation', 'Telemetry', 'diagnostics'
+    )
+
+    $items = @()
+    foreach ($pat in $filePatterns)
+    {
+        Get-ChildItem -LiteralPath $Path -Filter $pat -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $items += $_ }
+    }
+    foreach ($pat in $dirPatterns)
+    {
+        Get-ChildItem -LiteralPath $Path -Filter $pat -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { $items += $_ }
+    }
+
+    $unique = $items | Sort-Object -Property FullName -Unique
+    $totalBytes = ($unique | Where-Object { $_ -is [System.IO.FileInfo] } |
+        Measure-Object -Property Length -Sum).Sum
+    if ($null -eq $totalBytes) { $totalBytes = 0L }
+
+    $result = $unique | ForEach-Object {
+        $isDir = $_ -is [System.IO.DirectoryInfo]
+        [PSCustomObject]@{
+            Name   = if ($isDir) { $_.Name + '/' } else { $_.Name }
+            Path   = $_.FullName
+            Type   = if ($isDir) { 'Directory' } else { 'File' }
+            Length = if ($isDir) { 0 } else { $_.Length }
+        }
+    }
+    return @{ Items = $result; TotalBytes = $totalBytes }
+}
+
+# Shows a preview of removable items and asks for confirmation. Returns $true if
+# the user wants to proceed.
+function Show-CleanupPreview
+{
+    param(
+        [array]$Items,
+        [int64]$TotalBytes,
+        [string]$GameName
+    )
+
+    if ($Items.Count -eq 0) { return $false }
+
+    $sizeStr = if ($TotalBytes -gt 1GB) { '{0:N2} GB' -f ($TotalBytes / 1GB) }
+               elseif ($TotalBytes -gt 1MB) { '{0:N2} MB' -f ($TotalBytes / 1MB) }
+               else { '{0:N2} KB' -f ($TotalBytes / 1KB) }
+
+    Write-Host "`n[Steam Cleanup] $GameName" -ForegroundColor Cyan
+    Write-Host "Found $($Items.Count) item(s) totalling ~$sizeStr that can be safely removed:" -ForegroundColor DarkGray
+
+    $bigItems = $Items | Where-Object { $_.Length -gt 10MB } | Sort-Object Length -Descending
+    if ($bigItems.Count -gt 0)
+    {
+        Write-Host "  Large items:" -ForegroundColor Yellow
+        foreach ($item in $bigItems)
+        {
+            $sz = if ($item.Length -gt 1GB) { '{0:N2} GB' -f ($item.Length / 1GB) }
+                  else { '{0:N2} MB' -f ($item.Length / 1MB) }
+            Write-Host "    $sz  $($item.Name)"
+        }
+    }
+
+    $smallCount = $Items.Count - $bigItems.Count
+    if ($smallCount -gt 0)
+    {
+        Write-Host "  ...and $smallCount smaller file(s)" -ForegroundColor DarkGray
+    }
+
+    $response = Read-Host "Remove these files before compression? (y/n/detail) [y]"
+    if ($response -eq 'd')
+    {
+        Write-Host "`nFull item list:" -ForegroundColor Cyan
+        $Items | Sort-Object Name | ForEach-Object {
+            Write-Host "  $($_.Type)  $($_.Name)"
+        }
+        $response = Read-Host "Remove these files? (y/n) [y]"
+    }
+    if ([string]::IsNullOrWhiteSpace($response)) { $response = 'y' }
+    return $response -eq 'y'
+}
+
+# Removes the items returned by Get-SteamCleanupItems.
+function Invoke-SteamCleanup
+{
+    param([array]$Items)
+
+    $count = 0
+    foreach ($item in $Items)
+    {
+        try
+        {
+            if ($item.Type -eq 'Directory')
+            {
+                Remove-Item -LiteralPath $item.Path -Recurse -Force -ErrorAction Stop
+            } else
+            {
+                Remove-Item -LiteralPath $item.Path -Force -ErrorAction Stop
+            }
+            $count++
+        } catch
+        {
+            Write-Warning "Could not remove $($item.Path): $_"
+        }
+    }
+    Write-Host "  Cleanup: removed $count item(s)" -ForegroundColor Green
 }
 
 if (-not $SevenZipPath) { $SevenZipPath = Find-SevenZip }
@@ -181,13 +313,13 @@ function Build-GameVaultFileName
     { ""
     }
 
-    $allowedTypes = @('W_S','W','L','M','A')
-    $gameType = Read-Host "Enter game type (W_S, W, L, M, A) (default: $defType)"
+    $allowedTypes = @('W_S','W_P','W','L','M','A')
+    $gameType = Read-Host "Enter game type (W_S, W_P, W, L, M, A) (default: $defType)"
     if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = $defType }
     while ($gameType -notin $allowedTypes)
     {
         Write-Warning "Invalid game type. Must be one of: $($allowedTypes -join ', ')"
-        $gameType = Read-Host "Enter game type (W_S, W, L, M, A)"
+        $gameType = Read-Host "Enter game type (W_S, W_P, W, L, M, A)"
         if ([string]::IsNullOrWhiteSpace($gameType)) { $gameType = $defType }
     }
 
@@ -391,8 +523,22 @@ foreach ($game in $allGames)
         continue
     }
 
+    # Steam-specific: clean junk files before compression.
+    if ($gameSource -eq 'Steam' -and -not $SkipSteamCleanup)
+    {
+        $cleanup = Get-SteamCleanupItems -Path $gamePath
+        if (Show-CleanupPreview -Items $cleanup.Items -TotalBytes $cleanup.TotalBytes -GameName $gameName)
+        {
+            Invoke-SteamCleanup -Items $cleanup.Items
+        }
+    }
+
     # P6: parse existing folder name to pre-fill prompts.
     $defaults = Get-FolderNameDefaults -FolderName $gameName
+    if ($gameSource -eq 'Steam' -and [string]::IsNullOrWhiteSpace($defaults.GameType))
+    {
+        $defaults.GameType = 'W_P'
+    }
     $fileName = Build-GameVaultFileName -gameFolderName $gameName -gameSource $gameSource -Defaults $defaults
     $destinationFile = Join-Path -Path $DestinationDir -ChildPath $fileName
 
